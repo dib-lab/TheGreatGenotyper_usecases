@@ -1,4 +1,4 @@
-# TheGreatGenotyper_usecases
+# Pangenome Genotyping
 
 1. Downlaod Decomposed HPRC from https://zenodo.org/records/6797328
 
