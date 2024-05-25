@@ -1,0 +1,267 @@
+import os
+import glob
+import random
+
+
+INPUT_DIR = config["INPUT_DIR"]
+tempFolder = config["TEMP_FOLDER"]
+input_reference = config["INPUT_REFERENCE"]
+input_index = config["INPUT_INDEX"]
+TheGreatGenotyper = config["TheGreatGenotyper"]
+AnnotSV = config["AnnotSV"]
+bcftools = config["bcftools"]
+beagle = config["BEAGLE"]
+beagleMap = config["BEAGLE_MAP"]
+OUTPUT_DIR = config["OUTPUT_DIR"]
+
+
+
+
+# Get the list of all VCF files
+vcf_files = glob.glob(os.path.join(INPUT_DIR, "slice_*.vcf"))
+
+# Get the list of chromosomes based on the input files
+CHROMOSOMES = ["chr"+str(x) for x in range(1,23)] +["chrX"]
+CHROMOSOMES = ["chr"+str(x) for x in range(1,23)] 
+#CHROMOSOMES = ['chr1', 'chr5', 'chr22']
+slices = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09']
+
+
+rule all:
+    input:
+        expand(os.path.join(OUTPUT_DIR, "annotate_sv/{chrom}.annotated.tsv"), chrom=CHROMOSOMES)
+
+
+
+
+
+
+rule TheGreatGenotyper:
+    input:
+        graphs      = input_index,    
+        ref        = input_reference,
+        vcf        = INPUT_DIR + "slice_{slice}.vcf"
+    output:
+        merged_vcf= os.path.join(OUTPUT_DIR, "genotyped/slice_{slice}_chunk_{chunk}.vcf.gz"),    
+    log:
+        os.path.join(OUTPUT_DIR, "genotyped/slice_{slice}_chunk_{chunk}.log")
+    threads: 64
+    retries: 0
+    resources:
+        mem_mb=300*1024,
+        cores=64,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 15,
+        tmpdir= lambda wildcards: "%sgenotyper_%s_%s/"%(tempFolder,f"{wildcards.slice}",f"{wildcards.chunk}"),
+#        partition =  lambda wildcards: ["bmm","med2"][random.randint(0,1)] ,
+        partition = "med2",	
+    shell:
+        r"""
+	mkdir -p  {resources.tmpdir}
+    sed -n "{wildcards.chunk}p" {input.graphs} >  {resources.tmpdir}index.txt
+	{TheGreatGenotyper}   -f -g  -i  {resources.tmpdir}index.txt -j {threads} -t {threads} -r {input.ref}  -y  {resources.tmpdir}emissions -v {input.vcf} -o -  2> {log}  |  bgzip > {resources.tmpdir}out.vcf.gz
+	cp {resources.tmpdir}out.vcf.gz {output.merged_vcf} 
+	tabix -p vcf  {output.merged_vcf}
+	rm -rf {resources.tmpdir}
+	"""
+
+rule compress_and_index_vcf:
+    input:
+        "{prefix}.vcf"
+    output:
+        compressed = "{prefix}.vcf.gz",
+        index = "{prefix}.vcf.gz.tbi"
+    shell:
+        """
+        bgzip -c {input} > {output.compressed}
+        tabix -p vcf {output.compressed}
+        """
+
+
+def concat(wildcards):
+    chrom= wildcards.chrom
+    parts=glob.glob(os.path.join(INPUT_DIR, chrom+"_split_split_*.vcf"))
+    print(os.path.join(INPUT_DIR, chrom+"_split_split_*.vcf"))
+    print(parts)
+    return expand(os.path.join(OUTPUT_DIR, "genotyped/{chrom}_split_{part}.vcf.gz"),chrom=chrom,part=range(0,len(parts)))
+
+rule concat_vcfs:
+    input:
+        lambda wildcards: concat(wildcards)
+    output:
+        os.path.join(OUTPUT_DIR, "concat_vcfs/{chrom}.vcf.gz")
+    shell:
+        """
+        {bcftools} concat {input} |{bcftools} sort |bgzip > {output}
+	tabix -p vcf {output}
+        """
+ruleorder: filltags > run_beagle  > compress_and_index_vcf
+
+rule merge_population_chunks:
+    input:
+        population = expand("{out}genotyped/slice_{{slice}}_chunk_{chunk}.vcf.gz", out=OUTPUT_DIR  ,chunk= range(1,30)),
+    output:
+        OUTPUT_DIR+"genotyped/slice_{slice}.vcf.gz" 
+    log:
+        OUTPUT_DIR+"genotyped/slice_{slice}.log" 
+    threads: 16
+    retries: 0
+    resources:
+        mem_mb=20*1024,
+        cores=16,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge%s/"%(tempFolder,f"{wildcards.slice}")
+    shell:
+        r"""
+            mkdir -p {resources.tmp}
+            {bcftools} merge {input} | parallel -j {threads} --pipe --block 10m -k /home/mshokrof/TheGreatGenotyper/build6/PopMergeVCF/PopMergeVCF 2> {log} | bgzip > {resources.tmp}tmp.vcf.gz 
+            mv {resources.tmp}tmp.vcf.gz {output}
+            rm -rf {resources.tmp}
+	    #
+      	"""
+
+
+localrules: indexVCF
+
+
+rule indexVCF:
+    input:
+        vcf="{prefix}.vcf.gz",
+    output:
+        index="{prefix}.vcf.gz.tbi"
+    shell:
+        """
+	    tabix -p vcf {input.vcf}
+        """
+
+rule subsetChrom:
+    input:
+        vcf= OUTPUT_DIR+"{folder}/slice_{slice}.vcf.gz",
+        index= OUTPUT_DIR+"{folder}/slice_{slice}.vcf.gz.tbi"
+    output:
+        vcf=temp(OUTPUT_DIR+"{folder}/slice_{slice}_{chrom}.vcf.gz")
+    log:
+        OUTPUT_DIR+"{folder}/slice_{slice}_{chrom}.log"
+    wildcard_constraints:
+        chrom="|".join(CHROMOSOMES),
+        slice= "|".join(slices)
+    resources:
+        mem_mb=4*1024,
+        cores=1,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge_chrs%s/"%(tempFolder,f"{wildcards.chrom}")
+    shell:
+        """
+	    {bcftools} query -l  {input.vcf} | sort > samples.$$.txt
+            {bcftools} view -S samples.$$.txt -o {output.vcf} {input.vcf} {wildcards.chrom}  &> {log}
+	    rm samples.$$.txt
+        """
+
+rule merge_chrs:
+    input:
+        vcfs = expand("{out}genotyped/slice_{slice}_chr{{chrom}}.vcf.gz", out=OUTPUT_DIR , slice = slices)
+    output:
+        vcf= OUTPUT_DIR+"merged/chr{chrom}.vcf.gz",
+        tbi= OUTPUT_DIR+"merged/chr{chrom}.vcf.gz.tbi"
+    log:
+        OUTPUT_DIR+"merged/chr{chrom}.log" 
+    threads: 4
+    retries: 0
+    resources:
+        mem_mb=4*1024,
+        cores=1,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge_chrs%s/"%(tempFolder,f"{wildcards.chrom}")
+    shell:
+        r"""
+            mkdir -p {resources.tmp}
+            {bcftools} concat  {input.vcfs} |{bcftools} sort --max-mem 3G -T {resources.tmp} |bgzip > {output.vcf}
+            tabix -p vcf {output.vcf}
+            rm -rf {resources.tmp}
+      	"""
+
+
+
+ruleorder:  run_beagle > indexVCF
+
+rule run_beagle:
+    input:
+        vcf = os.path.join(OUTPUT_DIR, "merged/chr{chrom}.vcf.gz")
+    output:
+        OUTPUT_DIR+ "beagle_merged/chr{chrom}.vcf.gz",OUTPUT_DIR+ "beagle_merged/chr{chrom}.vcf.gz.tbi"
+    params:
+        prefix=OUTPUT_DIR+ "beagle_merged/chr{chrom}"
+    log:
+        OUTPUT_DIR+ "beagle_merged/chr{chrom}.log"
+    threads: 32
+    retries: 0
+    resources:
+        mem_mb=90000,
+        cores=32,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 12,
+        partition =  "med2",
+    shell:
+        """
+        java -Xmx80G -jar {beagle} gp=true gt={input} out={params.prefix} nthreads={threads}  map={beagleMap} &> {log}
+        tabix -p vcf {params.prefix}.vcf.gz
+
+        """
+
+
+
+rule filltags:
+    input:
+        vcf="{OUTPUT_DIR}/beagle_merged/{chrom}.vcf.gz",
+    	index="{OUTPUT_DIR}/beagle_merged/{chrom}.vcf.gz.tbi"
+    output:
+        "{OUTPUT_DIR}/beagle_merged/{chrom}.tagged.vcf.gz"
+    threads: 1
+    resources:
+        mem_mb=5000,
+        cores=1,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 12,
+        partition =  "med2",
+    shell:
+        """
+        {bcftools} +fill-tags {input.vcf} -Ov -- -t all | bgzip > {output}
+	tabix -p vcf {output}
+        """
+
+rule annotSV:
+    input:
+        vcf="{OUTPUT_DIR}/beagle_merged/{chrom}.tagged.vcf.gz",
+	    index="{OUTPUT_DIR}/beagle_merged/{chrom}.tagged.vcf.gz.tbi"
+    output:
+        annotated_tsv= "{OUTPUT_DIR}/annotate_sv/{chrom}.annotated.tsv",
+        unannotated_tsv= "{OUTPUT_DIR}/annotate_sv/{chrom}.unannotated.tsv"
+    threads: 4
+    resources:
+        mem_mb=50 *1024,
+        cores=4,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 10,
+        partition =  "med2",
+    shell:
+        """
+        mkdir -p Annot_SV_{wildcards.chrom}
+        {bcftools} view -s HGDP00845 {input.vcf}| bgzip > Annot_SV_{wildcards.chrom}/chr.vcf.gz
+        tabix -p vcf Annot_SV_{wildcards.chrom}/chr.vcf.gz
+        {AnnotSV}  -SVminSize 20 -vcf 0 -SVinputFile Annot_SV_{wildcards.chrom}/chr.vcf.gz -outputDir Annot_SV_{wildcards.chrom} -benignAF 0.001
+        cp Annot_SV_{wildcards.chrom}/chr.annotated.tsv {output.annotated_tsv}
+        cp Annot_SV_{wildcards.chrom}/chr.unannotated.tsv {output.unannotated_tsv}
+        """

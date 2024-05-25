@@ -1,0 +1,13 @@
+INPUT_DIR: "sliced_pangenome_10/"
+TEMP_FOLDER: "/scratch/"
+INPUT_REFERENCE: "GRCh38_full_analysis_set_plus_decoy_hla.fa"
+INPUT_INDEX: "index.txt"
+BEAGLE: "beagle.22Jul22.46e.jar"
+BEAGLE_MAP: "plink.autsomal.map"
+TheGreatGenotyper: "build/pangenie/src/TheGreatGenotyper"
+AnnotSV: "AnnotSV/bin/annotsv"
+bcftools: "bcftools"
+OUTPUT_DIR: "output/"
+
+
+
