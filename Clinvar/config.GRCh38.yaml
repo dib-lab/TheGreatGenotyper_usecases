@@ -1,0 +1,9 @@
+TEMP_FOLDER: "/scratch/mshokrof/"
+INPUT_REFERENCE: "GRCh38_full_analysis_set_plus_decoy_hla.fa"
+INPUT_INDEX: "TheGreatGenotyper/index.txt"
+BEAGLE: "beagle.22Jul22.46e.jar"
+BEAGLE_MAP: "plink.autsomal.map"
+OUTPUT_DIR: "4k_clinvar/"
+bcftools: "bcftools"
+TheGreatGenotyper: "TheGreatGenotyper"
+

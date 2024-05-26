@@ -1,0 +1,179 @@
+import os
+import glob
+import random
+print(config)
+
+
+tempFolder = config["TEMP_FOLDER"]
+input_reference = config["INPUT_REFERENCE"]
+input_index = config["INPUT_INDEX"]
+beagle = config["BEAGLE"]
+beagleMap = config["BEAGLE_MAP"]
+OUTPUT_DIR = config["OUTPUT_DIR"]
+TheGreatGenotyper = config["TheGreatGenotyper"]
+bcftools = config["bcftools"]
+
+
+
+# Get the list of all VCF files
+
+## Get the list of chromosomes based on the input files
+CHROMOSOMES = ["chr"+str(x) for x in range(1,23)] 
+#CHROMOSOMES = [ "chr21"]
+
+#slices = ['00', '01', '02', '03', '04']
+#slices = ['00']
+#print(CHROMOSOMES)
+
+rule all:
+    input:
+        OUTPUT_DIR+"genotyped/clinvar.vcf.gz"
+
+
+# I am subtracting 100GB out of thesse values
+
+
+rule TheGreatGenotyper:
+    input:
+        graphs      = input_index,    
+        ref        = input_reference,
+        vcf        = "clinvar.normalized.noalt.dummySamples.vcf"
+    output:
+        merged_vcf= os.path.join(OUTPUT_DIR, "genotyped/clinvar_{chunk}.vcf.gz"),    
+    log:
+        os.path.join(OUTPUT_DIR, "genotyped/clinvar_{chunk}.log")
+    threads: 64
+    retries: 0
+    resources:
+        mem_mb=100*1024,
+#        mem_mb=lambda wildcards: (resources_mb[wildcards.chunk])*1024,
+        cores=64,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 15,
+        tmpdir= lambda wildcards: "%sgenotyper_%s_%s/"%(tempFolder,f"gwas",f"{wildcards.chunk}"),
+#        partition =  lambda wildcards: ["bmm","med2"][random.randint(0,1)] ,
+        partition = "med2",	
+    shell:
+        r"""
+	        mkdir -p  {resources.tmpdir}
+            sed -n "{wildcards.chunk}p" {input.graphs} >  {resources.tmpdir}index.txt
+	        {TheGreatGenotyper}   -f -g  -i  {resources.tmpdir}index.txt -j {threads} -t {threads} -r {input.ref}  -y  {resources.tmpdir}emissions -v {input.vcf} -o -  2> {log}  |  bgzip > {resources.tmpdir}out.vcf.gz
+	        cp {resources.tmpdir}out.vcf.gz {output.merged_vcf} 
+	        tabix -p vcf  {output.merged_vcf}
+	        rm -rf {resources.tmpdir}
+	    """
+
+# rule compress_and_index_vcf:
+#     input:
+#         "{prefix}.vcf"
+#     output:
+#         compressed = "{prefix}.vcf.gz",
+#         index = "{prefix}.vcf.gz.tbi"
+#     shell:
+#         """
+#         bgzip -c {input} > {output.compressed}
+#         tabix -p vcf {output.compressed}
+#         """
+
+
+ruleorder: filltags > run_beagle 
+
+rule merge_population_chunks:
+    input:
+        population = expand("{out}genotyped/clinvar_{chunk}.vcf.gz", out=OUTPUT_DIR  ,chunk= range(1,30)),
+    output:
+        OUTPUT_DIR+"genotyped/clinvar.vcf.gz" 
+    log:
+        OUTPUT_DIR+"genotyped/clinvar.log" 
+    threads: 16
+    retries: 0
+    resources:
+        mem_mb=20*1024,
+        cores=16,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge%s/"%(tempFolder,f"gwas")
+    shell:
+        r"""
+            mkdir -p {resources.tmp}
+            {bcftools} merge {input} | parallel -j {threads} --pipe --block 10m -k /home/mshokrof/TheGreatGenotyper/build6/PopMergeVCF/PopMergeVCF 2> {log} | bgzip > {resources.tmp}tmp.vcf.gz 
+            mv {resources.tmp}tmp.vcf.gz {output}
+            rm -rf {resources.tmp}
+	    #
+      	"""
+
+
+
+
+rule run_beagle:
+    input:
+        os.path.join(OUTPUT_DIR, "genotyped/slice_{slice}.vcf.gz")
+    output:
+        OUTPUT_DIR+ "beagle_out/slice_{slice}.vcf.gz"
+    params:
+        prefix=OUTPUT_DIR+ "beagle_out/slice_{slice}"
+    log:
+        OUTPUT_DIR+ "beagle_out/slice_{slice}.log"
+    threads: 32
+    retries: 0
+    resources:
+        mem_mb=50000,
+        cores=32,
+        nodes = 1,
+        meduim=1,
+        time = 60 * 16,
+        partition =  "med2",
+    shell:
+        """
+        java -Xmx40G -jar {beagle} gt={input} out={params.prefix} nthreads={threads}  map={beagleMap} &> {log}
+        """
+
+
+
+rule filltags:
+    input:
+        vcf="{OUTPUT_DIR}/beagle_out/{chrom}.vcf.gz",
+	index="{OUTPUT_DIR}/beagle_out/{chrom}.vcf.gz.tbi"
+    output:
+        "{OUTPUT_DIR}/beagle_out/{chrom}.tagged.vcf.gz"
+    shell:
+        """
+        {bcftools} +fill-tags {input.vcf} -Ov -- -t all | bgzip > {output}
+	tabix -p vcf {output}
+        """
+
+
+rule index_vcf:
+    input:
+        "{path}/{file}.vcf.gz"
+    output:
+        "{path}/{file}.vcf.gz.tbi"
+    shell:
+        "tabix -p vcf {input}"
+
+rule subsetChrom:
+    input:
+        vcf=  OUTPUT_DIR+"genotyped/clinvar.vcf.gz",
+        index=  OUTPUT_DIR+"genotyped/clinvar.vcf.gz.tbi"
+    output:
+        vcf=OUTPUT_DIR+"byChromosome/{chrom}.vcf.gz"
+    log:
+        OUTPUT_DIR+"byChromosome/{chrom}.log"
+    wildcard_constraints:
+        chrom="|".join(CHROMOSOMES)
+    resources:
+        mem_mb=4*1024,
+        cores=1,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge_chrs%s/"%(tempFolder,f"{wildcards.chrom}")
+    shell:
+        """
+	    {bcftools} view  -Oz -o {output.vcf} {input.vcf} {wildcards.chrom}  &> {log}
+	    tabix -p vcf {output.vcf}
+        """
