@@ -27,7 +27,7 @@ CHROMOSOMES = ["chr"+str(x) for x in range(1,23)]
 
 rule all:
     input:
-        OUTPUT_DIR+"genotyped/clinvar.vcf.gz"
+        OUTPUT_DIR+"genotyped/clinvar.tagged.vcf.gz"
 
 
 # I am subtracting 100GB out of thesse values
@@ -135,10 +135,10 @@ rule run_beagle:
 
 rule filltags:
     input:
-        vcf="{OUTPUT_DIR}/beagle_out/{chrom}.vcf.gz",
-	index="{OUTPUT_DIR}/beagle_out/{chrom}.vcf.gz.tbi"
+        vcf="{OUTPUT_DIR}/genotyped/clinvar.vcf.gz",
+	    index="{OUTPUT_DIR}/genotyped/clinvar.vcf.gz.tbi"
     output:
-        "{OUTPUT_DIR}/beagle_out/{chrom}.tagged.vcf.gz"
+        "{OUTPUT_DIR}/genotyped/clinvar.tagged.vcf.gz"
     shell:
         """
         {bcftools} +fill-tags {input.vcf} -Ov -- -t all | bgzip > {output}
