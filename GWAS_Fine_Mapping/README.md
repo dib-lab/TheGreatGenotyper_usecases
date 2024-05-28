@@ -50,3 +50,6 @@ grep  -v "chrMT"> GWAS.chr.vcf
 ```
 snakemake --configfile config.yaml -np
 ```
+
+## Final Output
+The final output is created by curating the output of the previous script and aggregating the results with the GWAS catalog and AnnotSV output. The final output is in the form of [an Excel sheet](https://github.com/dib-lab/TheGreatGenotyper_usecases/blob/main/GWAS_Fine_Mapping/GWAS_SV_ASSOCIATIONS.xlsx).
