@@ -27,6 +27,26 @@ bcftools annotate --force --rename-chrs chr_name_conv.txt GWAS.vcf | \
 grep  -v "chrMT"> GWAS.chr.vcf
 
 ./addDummySample.sh  GWAS.chr.vcf GWAS.chr.dummy.vcf
+```
+
+## 2. Running Workflow
+1. Edit config.yaml to configure input and output, as well as programs.
+
+| Field             | Description                                                                                            |
+|-------------------|--------------------------------------------------------------------------------------------------------|
+| INPUT_DIR         | Input folder containing the sliced pangenome                                                           |
+| PANGENOME         | Input Folder containing pangenome produced by pangenome genotyping [use cases](https://github.com/dib-lab/TheGreatGenotyper_usecases/tree/main/Pangenome_Genotyping/)
+| TEMP_FOLDER       | Folder to store temporary files.                                                                       |
+| INPUT_REFERENCE   | Input genome reference                                                                                 |
+| INPUT_INDEX       | Txt file containing a list of CCDG indexes.                                                            |
+| BEAGLE            | Binary Path for Beagle                                                                                 |
+| BEAGLE_MAP        | Beagle MAP file. Download here([maps](https://bochet.gcc.biostat.washington.edu/beagle/genetic_maps/)) |
+| TheGreatGenotyper | Binary Path for The Great Genotyper                                                                    |
+| bcftools          | Binary path for Bcftools                                                                               |
+| OUTPUT_dir        | Output Directory                                                                                       |
 
 
+2. Run the workflow
+```
+snakemake --configfile config.yaml -np
 ```
