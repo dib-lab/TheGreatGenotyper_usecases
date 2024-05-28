@@ -36,3 +36,6 @@ wget https://zenodo.org/records/6797328/files/cactus_filtered_ids.vcf.gz
 snakemake --configfile config.yaml -np
 ```
 
+# Output
+the final output can be downloaded from this [link](https://farm.cse.ucdavis.edu/~mshokrof/4k_reference_panel/)
+
