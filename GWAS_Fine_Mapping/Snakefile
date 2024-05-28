@@ -1,0 +1,258 @@
+import os
+import glob
+import random
+
+
+INPUT_VCFS = config["INPUT_VCFS"]
+tempFolder = config["TEMP_FOLDER"]
+input_reference = config["INPUT_REFERENCE"]
+
+index_list = config["INPUT_INDEX"]
+beagle = config["BEAGLE"]
+beagleMap = config["BEAGLE_MAP"]
+OUTPUT_DIR = config["OUTPUT_DIR"]
+pangenome = config["PANGENOME"]
+TheGreatGenotyper = config["TheGreatGenotyper"]
+bcftools = config["bcftools"]
+
+VCF_NAMES= [v.split("/")[-1][:-4]  for v in INPUT_VCFS]
+
+inputs= dict(zip(VCF_NAMES,INPUT_VCFS))
+
+OUTPUT_VCFS = [f"{OUTPUT_DIR}beagle_tagged/{v}.gz" for v in VCF_NAMES]
+
+
+OUTPUT_VCFS = []
+chromsomes= [ f"chr{c}" for c in range(1,22)]
+
+for vcf in VCF_NAMES:
+    for chrom in chromsomes:
+        OUTPUT_VCFS.append(f"{OUTPUT_DIR}LD/{vcf}/{chrom}.vcor")
+
+rule all:
+    input:
+        OUTPUT_VCFS
+
+
+
+rule TheGreatGenotyper:
+    input:
+        graphFolders      =  index_list,    
+        ref        = input_reference,
+        vcf        = lambda wildcards: inputs[wildcards.vcf]
+    output:
+        merged_vcf= os.path.join(OUTPUT_DIR, "genotyped/{vcf}_chunk_{chunk}.vcf.gz"),    
+    log:
+        os.path.join(OUTPUT_DIR, "genotyped/{vcf}_chunk_{chunk}.log")
+    threads: 64
+    retries: 0
+    resources:
+        mem_mb=400*1024,
+#        mem_mb=lambda wildcards: resources_mb[wildcards.chunk]*1024,
+        cores=64,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 24,
+        tmpdir= lambda wildcards: "%sgenotyper_%s_%s/"%(tempFolder,f"{wildcards.vcf}",f"{wildcards.chunk}"),
+#        partition =  lambda wildcards: ["bmm","med2"][random.randint(0,1)] ,
+        partition = "med2",	
+    shell:
+        r"""
+	        mkdir -p  {resources.tmpdir}
+            sed -n '{wildcards.chunk}p' {input.graphFolders} > {resources.tmpdir}graphs.lst
+            cat {resources.tmpdir}graphs.lst
+	        {TheGreatGenotyper} -a  -f -g  -i {resources.tmpdir}graphs.lst  -j {threads} -t {threads} -r {input.ref}  -y  {resources.tmpdir}emissions -v {input.vcf} -o -  2> {log}  |  bgzip > {resources.tmpdir}out.vcf.gz
+	        cp {resources.tmpdir}out.vcf.gz {output.merged_vcf} 
+	        tabix -p vcf  {output.merged_vcf}
+	        rm -rf {resources.tmpdir}
+	    """
+
+# rule compress_and_index_vcf:
+#     input:
+#         "{prefix}.vcf"
+#     output:
+#         compressed = "{prefix}.vcf.gz",
+#         index = "{prefix}.vcf.gz.tbi"
+#     shell:
+#         """
+#         bgzip -c {input} > {output.compressed}
+#         tabix -p vcf {output.compressed}
+#         """
+
+
+
+
+ruleorder: filltags > run_beagle 
+
+rule merge_population_chunks:
+    input:
+        population = expand("{out}genotyped/{{vcf}}_chunk_{chunk}.vcf.gz", out=OUTPUT_DIR  ,chunk= range(1,30)),
+    output:
+        vcf = OUTPUT_DIR+"merged/{vcf}.vcf.gz" , tbi= OUTPUT_DIR+"merged/{vcf}.vcf.gz.tbi"
+    log:
+        OUTPUT_DIR+"merged/{vcf}.log" 
+    threads: 16
+    retries: 0
+    resources:
+        mem_mb=20*1024,
+        cores=16,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge%s/"%(tempFolder,f"{wildcards.vcf}")
+    shell:
+        r"""
+            mkdir -p {resources.tmp}
+            {bcftools} merge {input} | parallel -j {threads} --pipe --block 10m -k /home/mshokrof/TheGreatGenotyper/build6/PopMergeVCF/PopMergeVCF 2> {log} | bgzip > {resources.tmp}tmp.vcf.gz 
+            mv {resources.tmp}tmp.vcf.gz {output.vcf}
+            tabix -p vcf {output.vcf}
+            rm -rf {resources.tmp}
+      	"""
+
+
+
+
+# localrules: indexVCF
+
+
+# rule indexVCF:
+#     input:
+#         vcf="{prefix}.vcf.gz",
+#     output:
+#         index="{prefix}.vcf.gz.tbi"
+#     shell:
+#         """
+# 	        tabix -p vcf {input.vcf}
+#         """
+
+
+rule run_beagle:
+    input:
+        vcf = OUTPUT_DIR+"pangenome_merged/{vcf}/{chrom}.vcf.gz"
+    output:
+        OUTPUT_DIR+ "pangenome/{vcf}/{chrom}.vcf.gz",OUTPUT_DIR+ "pangenome/{vcf}/{chrom}.vcf.gz.tbi"
+    params:
+        prefix=OUTPUT_DIR+ "pangenome/{vcf}/{chrom}"
+    log:
+        OUTPUT_DIR+ "pangenome/{vcf}/{chrom}.log"
+    threads: 32
+    retries: 0
+    resources:
+        mem_mb=90000,
+        cores=32,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 12,
+        partition =  "med2",
+    shell:
+        """
+	        {bcftools} view {input.vcf} chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20  chr21 chr22| bgzip > tmp.$$.vcf.gz
+	        tabix -p vcf tmp.$$.vcf.gz
+            java -Xmx80G -jar {beagle} gp=true gt=tmp.$$.vcf.gz out={params.prefix} nthreads={threads}  map={beagleMap} &> {log}
+            tabix -p vcf {params.prefix}.vcf.gz
+        """
+
+
+
+rule filltags:
+    input:
+        vcf="{OUTPUT_DIR}/beagle/{vcf}.vcf.gz",
+    	index="{OUTPUT_DIR}/beagle/{vcf}.vcf.gz.tbi"
+    output:
+        vcf="{OUTPUT_DIR}/beagle_tagged/{vcf}.vcf.gz",
+        index="{OUTPUT_DIR}/beagle_tagged/{vcf}.vcf.gz.tbi"
+    resources:
+        mem_mb=10000,
+        cores=4,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 8,
+        partition =  "med2",
+    shell:
+        """
+            {bcftools} +fill-tags {input.vcf} -Ov -- -t all | bgzip > {output.vcf}
+	        tabix -p vcf {output.vcf}
+        """
+
+
+
+
+
+
+
+rule merge_with_pangenome:
+    input:
+        vcf= "{OUTPUT_DIR}/merged/{vcf}.vcf.gz",
+        pangenome = pangenome+"beagle/{chrom}.tagged.vcf.gz"
+    output:
+        vcf="{OUTPUT_DIR}/pangenome_merged/{vcf}/{chrom}.vcf.gz",
+        index="{OUTPUT_DIR}/pangenome_merged/{vcf}/{chrom}.vcf.gz.tbi"
+    threads: 1
+    resources:
+        mem_mb=1 *1024,
+        cores=1,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 1,
+        partition =  "med2",
+        tmp= lambda wildcards: "%smerge_with_pangenome_%s"%(tempFolder,f"{wildcards.chrom}")
+    shell:
+        """
+            mkdir -p {resources.tmp}/
+            {bcftools} view --header-only {input.pangenome} |grep -P "#CHRO" |cut -f10-| tr -s $"\t" $"\n" > {resources.tmp}/samples.lst
+            {bcftools} view  -S {resources.tmp}/samples.lst {input.vcf} {wildcards.chrom} |bgzip > {resources.tmp}/vcf.vcf.gz
+            tabix -p vcf {resources.tmp}/vcf.vcf.gz
+            
+            {bcftools} concat  {resources.tmp}/vcf.vcf.gz {input.pangenome} | \
+            {bcftools} sort | \
+            {bcftools} norm -m +any |\
+            awk 'BEGIN{{OFS="\t"}} /^#/ {{print; next}} {{ $3=substr($3, 1, 1000); print}}' | \
+            bgzip > {output.vcf}
+
+            tabix -p vcf {output.vcf}
+            rm -rf {resources.tmp}/
+        """
+
+
+rule calulateLD:
+    input:
+        vcf="{OUTPUT_DIR}/pangenome/{vcf}/{chrom}.vcf.gz",
+	    index="{OUTPUT_DIR}/pangenome/{vcf}/{chrom}.vcf.gz.tbi"
+    output:
+        vcor= "{OUTPUT_DIR}/LD/{vcf}/{chrom}.vcor"
+    params:
+        out_prefix=  "{OUTPUT_DIR}/LD/{vcf}/{chrom}"
+    threads: 32
+    resources:
+        mem_mb=60 *1024,
+        cores=32,
+        nodes = 1,
+        meduim=1,
+        runtime = 60 * 48,
+        partition =  "med2",
+        tmpdir= lambda wildcards: "%scalculateLD%s/"%(tempFolder,f"{wildcards.chrom}")
+    shell:
+        """
+            mkdir -p {resources.tmpdir}
+
+            zgrep "rs"  {input.vcf} |grep -vP "^#"|cut -f3 |sort |uniq> {wildcards.chrom}.sv.ids
+            
+
+            ./plink2 --indep-pairwise  500kb 0.8 \
+                    --indep-preferred {wildcards.chrom}.sv.ids \
+                    --vcf   {input.vcf} \
+                    --threads {threads} \
+                    --r-phased \
+                    --ld-snp-list {wildcards.chrom}.sv.ids \
+                    --out  {resources.tmpdir}tmp 
+            
+            mv {resources.tmpdir}tmp.vcor {params.out_prefix}.vcor
+            mv {resources.tmpdir}tmp.log {params.out_prefix}.log
+            mv {resources.tmpdir}tmp.prune.in {params.out_prefix}.prune.in
+            mv {resources.tmpdir}tmp.prune.out {params.out_prefix}.prune.out
+        
+
+            rm -rf  {resources.tmpdir}
+        """
+

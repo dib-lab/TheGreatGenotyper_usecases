@@ -1,0 +1,12 @@
+INPUT_VCFS: ["GWAS.vcf"]
+TEMP_FOLDER: "/scratch/mshokrof/"
+INPUT_REFERENCE: "/group/ctbrowngrp/mshokrof/GRCh38_full_analysis_set_plus_decoy_hla.fa"
+INPUT_INDEX: "/home/mshokrof/TheGreatGenotyper/index.txt"
+BEAGLE: "/home/mshokrof/genotyping-experiments/SV_genotyping/beagle.22Jul22.46e.jar"
+BEAGLE_MAP: "/home/mshokrof/genotyping-experiments/SV_genotyping/plink.autsomal.map"
+PANGENOME: "/group/ctbrowngrp/mshokrof/Extended_pangenome/"
+OUTPUT_DIR: "GWAS/"
+bcftools: "bcftools"
+TheGreatGenotyper: "TheGreatGenotyper"
+
+
